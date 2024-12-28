@@ -1,0 +1,174 @@
+S2AG Datasets (1.0)
+Download OpenAPI specification:Download
+
+Download full-corpus datasets from the Semantic Scholar Academic Graph (S2AG)
+
+Some python demonstrating usage of the datasets API:
+
+r1 = requests.get('https://api.semanticscholar.org/datasets/v1/release').json()
+print(r1[-3:])
+['2023-03-14', '2023-03-21', '2023-03-28']
+
+r2 = requests.get('https://api.semanticscholar.org/datasets/v1/release/latest').json()
+print(r2['release_id'])
+2023-03-28
+
+print(json.dumps(r2['datasets'][0], indent=2))
+{
+    "name": "abstracts",
+    "description": "Paper abstract text, where available. 100M records in 30 1.8GB files.",
+    "README": "Semantic Scholar Academic Graph Datasets The "abstracts" dataset provides..."
+}
+
+r3 = requests.get('https://api.semanticscholar.org/datasets/v1/release/latest/dataset/abstracts').json()
+print(json.dumps(r3, indent=2))
+{
+  "name": "abstracts",
+  "description": "Paper abstract text, where available. 100M records in 30 1.8GB files.",
+  "README": "Semantic Scholar Academic Graph Datasets The "abstracts" dataset provides...",
+  "files": [
+    "https://ai2-s2ag.s3.amazonaws.com/dev/staging/2023-03-28/abstracts/20230331_0..."
+  ]
+}
+    
+Release Data
+List of Available Releases
+Releases are identified by a date stamp such as "2023-08-01". Each release contains full data for each dataset.
+
+Responses
+200 List of Available Releases
+
+get
+/release/
+Response samples
+200
+Content type
+application/json
+
+Copy
+[
+"2022-01-17"
+]
+List of Datasets in a Release
+Metadata describing a particular release, including a list of datasets available.
+
+path Parameters
+release_id
+required
+string
+ID of the release
+
+Responses
+200 Contents of the release with the given ID
+
+get
+/release/{release_id}
+Response samples
+200
+Content type
+application/json
+
+Copy
+Expand allCollapse all
+{
+"release_id": "2022-01-17",
+"README": "Subject to the following terms ...",
+"datasets": [
+{}
+]
+}
+Download Links for a Dataset
+Datasets are partitioned and stored on S3. Clients can retrieve them by requesting this list of pre-signed download urls and fetching all the partitions.
+
+path Parameters
+dataset_name
+required
+string
+Name of the dataset
+
+release_id
+required
+string
+ID of the release
+
+Responses
+200 Description and download links for the given dataset within the given release
+
+get
+/release/{release_id}/dataset/{dataset_name}
+Response samples
+200
+Content type
+application/json
+
+Copy
+Expand allCollapse all
+{
+"name": "papers",
+"description": "Core paper metadata",
+"README": "Subject to terms of use as follows ...",
+"files": [
+"https://..."
+]
+}
+Incremental Updates
+Download Links for Incremental Diffs
+Full datasets can be updated from one release to another to avoid downloading and processing data that hasn't changed. This method returns a list of all the "diffs" that are required to catch a given dataset up from its current release to a newer one.
+
+Each "diff" represents changes between two sequential releases, and contains two lists of files, an "updated" list and a "deleted" list. Records in the "updated" list need to be inserted or replaced by their primary key. Records in the "deleted" list should be removed.
+
+Example code for updating a database or key/value store:
+
+difflist = requests.get('https://api.semanticscholar.org/datasets/v1/diffs/2023-08-01/to/latest/papers').json()
+for diff in difflist['diffs']:
+    for url in diff['update_files']:
+        for json_line in requests.get(url).iter_lines():
+            record = json.loads(json_line)
+            datastore.upsert(record['corpusid'], record)
+    for url in diff['delete_files']:
+        for json_line in requests.get(url).iter_lines():
+            record = json.loads(json_line)
+            datastore.delete(record['corpusid'])
+Example code for updating via a join in Spark:
+
+current = sc.textFile('s3://curr-dataset-location').map(json.loads).keyBy(lambda x: x['corpusid'])
+updates = sc.textFile('s3://diff-updates-location').map(json.loads).keyBy(lambda x: x['corpusid'])
+deletes = sc.textFile('s3://diff-deletes-location').map(json.loads).keyBy(lambda x: x['corpusid'])
+
+updated = current.fullOuterJoin(updates).mapValues(lambda x: x[1] if x[1] is not None else x[0])
+updated = updated.fullOuterJoin(deletes).mapValues(lambda x: None if x[1] is not None else x[0]).filter(lambda x: x[1] is not None)
+updated.values().map(json.dumps).saveAsTextFile('s3://updated-dataset-location')
+path Parameters
+dataset_name
+required
+string
+Name of the dataset
+
+end_release_id
+required
+string
+ID of the release the client wishes to update to, or 'latest' for the most recent release
+
+start_release_id
+required
+string
+ID of the release held by the client
+
+Responses
+200 List of download links for one dataset between given releases
+Response Schema: application/json
+dataset	
+string
+Dataset these diffs are for.
+
+start_release	
+string
+Beginning release, i.e. the release currently held by the client.
+
+end_release	
+string
+Ending release, i.e. the release the client wants to update to.
+
+diffs	
+Array of objects (Dataset_Diff)
+List of diffs that need to be applied to bring the dataset at 'start_release' up to date with 'end_release'.
